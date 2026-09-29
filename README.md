@@ -304,6 +304,24 @@ crontab -e
 # Delete the ai-news line and save
 ```
 
+## Automated Weekly Reports (Windows Task Scheduler)
+
+On Windows, register a Task Scheduler task that follows `schedule:` in `config/config.yaml`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup_task.ps1
+```
+
+The task runs `scripts\run_report.ps1` as the current user while logged on (the Claude Code login
+lives in the user profile), appends output to `task.log`, and catches up on a missed run when the
+PC was off. The schedule uses the PC's local time.
+
+```powershell
+Start-ScheduledTask -TaskName "AI News Reporter"       # Run now
+Get-Content task.log -Tail 30                           # View logs
+Unregister-ScheduledTask -TaskName "AI News Reporter"  # Remove
+```
+
 ## Project Structure
 
 ```
@@ -323,7 +341,9 @@ ai_news_reporter/
 │   ├── .env              # API keys (git-ignored)
 │   └── .env.example
 ├── scripts/
-│   └── setup_cron.sh     # Cron setup script
+│   ├── setup_cron.sh     # Cron setup script (Linux/macOS)
+│   ├── setup_task.ps1    # Task Scheduler setup script (Windows)
+│   └── run_report.ps1    # Report runner used by the Windows task
 └── reports/              # Generated reports
 ```
 
