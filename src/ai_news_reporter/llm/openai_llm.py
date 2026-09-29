@@ -8,6 +8,9 @@ from ..core.exceptions import LLMError
 from ..models.article import Article
 from .base import BaseLLM
 
+MAX_SUMMARY_CHARS = 800
+# A period followed by whitespace (so "3.8" is not a sentence end), or a Japanese full stop
+SENTENCE_END = re.compile(r"[.!?](?=\s)|[。！？]")
 
 DEFAULT_SUMMARY_PROMPT = """You are a professional news analyst specializing in artificial intelligence and technology.
 
@@ -17,6 +20,7 @@ IMPORTANT RULES:
 - Write ONLY 2-3 SHORT sentences. Be concise.
 - NO headers, NO subsections, NO bullet points, NO numbered lists.
 - Include inline source links using [Source Name](URL) format.
+- Write in {language}.
 - Example: "This week saw major advances in AI healthcare with [Utah's prescription AI initiative](url) and [OpenAI's Torch acquisition](url)."
 {focus}
 Here are the articles to analyze:
@@ -60,6 +64,7 @@ class OpenAILLM(BaseLLM):
         articles: list[Article],
         prompt: str | None = None,
         focus: str = "",
+        language: str = "English",
     ) -> str:
         """Generate a summary using OpenAI.
 
@@ -67,6 +72,7 @@ class OpenAILLM(BaseLLM):
             articles: List of articles to summarize.
             prompt: Optional custom prompt.
             focus: Optional focus instructions for the report.
+            language: Language to write in.
 
         Returns:
             Generated summary.
@@ -76,18 +82,21 @@ class OpenAILLM(BaseLLM):
 
         context = self._format_articles_for_context(articles)
         focus_text = f"\nFOCUS: {focus}\n" if focus else ""
-        full_prompt = (prompt or DEFAULT_SUMMARY_PROMPT).format(articles=context, focus=focus_text)
+        full_prompt = (prompt or DEFAULT_SUMMARY_PROMPT).format(
+            articles=context, focus=focus_text, language=language
+        )
 
+        return self._clean_summary(await self._complete(full_prompt))
+
+    async def _complete(self, prompt: str) -> str:
         try:
             response = self._client.chat.completions.create(
                 model=self._model,
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
-                messages=[{"role": "user", "content": full_prompt}],
+                messages=[{"role": "user", "content": prompt}],
             )
-            summary = response.choices[0].message.content or ""
-            return self._clean_summary(summary)
-
+            return response.choices[0].message.content or ""
         except Exception as e:
             raise LLMError(f"OpenAI API error: {e}") from e
 
@@ -128,10 +137,11 @@ class OpenAILLM(BaseLLM):
         # Keep only first paragraph (should be 2-3 sentences)
         paragraphs = [p.strip() for p in result.split("\n\n") if p.strip()]
         if paragraphs:
-            # Return only the first substantial paragraph, max 600 chars
+            # Return only the first substantial paragraph, cut at a sentence end if too long
             first = paragraphs[0]
-            if len(first) > 600:
-                first = first[:600].rsplit(".", 1)[0] + "."
+            if len(first) > MAX_SUMMARY_CHARS:
+                ends = list(SENTENCE_END.finditer(first[:MAX_SUMMARY_CHARS]))
+                first = first[: ends[-1].end()].strip() if ends else first[:MAX_SUMMARY_CHARS]
             return first
         return result
 
@@ -142,6 +152,7 @@ class OpenAILLM(BaseLLM):
         prompt: str | None = None,
         highlight_count: int = 10,
         focus: str = "",
+        language: str = "English",
     ) -> str:
         """Generate a full report using OpenAI.
 
@@ -151,11 +162,12 @@ class OpenAILLM(BaseLLM):
             prompt: Optional custom prompt.
             highlight_count: Number of articles to feature in Highlight News.
             focus: Optional focus instructions for the report.
+            language: Language to write in.
 
         Returns:
             Generated report in markdown.
         """
-        summary = await self.summarize(articles, prompt, focus)
+        summary = await self.summarize(articles, prompt, focus, language)
 
         # Split articles into highlights and related
         highlight_articles = articles[:highlight_count]

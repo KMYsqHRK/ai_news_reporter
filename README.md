@@ -4,7 +4,8 @@ Automated AI news collection and reporting system. Collects news from web scrapi
 
 ## Features
 
-- **Multi-source collection**: Tavily search API + configurable web scraping
+- **Multi-source collection**: Tavily search API or Claude Code web search + configurable web scraping
+- **GitHub stars**: Releases and commits of repositories you starred
 - **Switchable LLM**: Claude API (default), Claude account via Claude Code, or OpenAI for summarization
 - **Multiple delivery methods**: Email (SMTP), Slack webhook, File (Markdown/HTML/JSON)
 - **Scheduled reports**: Cron-style scheduling with APScheduler
@@ -95,6 +96,37 @@ uv run ai-news run
 
 Reports are saved to `./reports/` folder in Markdown, HTML, and JSON formats.
 
+## Optional: Web Search Without an API Key
+
+With the Claude Code setup from Option C, news search can also run through the Claude account
+(Claude Code's built-in WebSearch tool) instead of Tavily:
+
+```yaml
+search:
+  enabled: true
+  provider: "claude_code"   # uses llm.cli_path, and llm.model when llm.provider is claude_code
+```
+
+Each keyword is one `claude -p` run, so keep the keyword list short to save account usage.
+
+## Optional: Starred GitHub Repository Updates
+
+Adds a "GitHub Starred Updates" section: for each repository you starred that changed in the
+period, the LLM summarizes all of its releases and commits into a few bullet points.
+
+```yaml
+github:
+  enabled: true
+  username: "your-github-username"
+  time_range: "week"
+  exclude: ["pytorch/pytorch"]   # optional: skip noisy repos
+```
+
+No token is needed for a typical number of stars. Commits are read from the GitHub API, which
+allows 60 requests/hour without a token (about one per active repository). When that runs out, the
+remaining repositories show only their latest 20 commits and the summary says so; set
+`GITHUB_TOKEN` in `config/.env` (a read-only token with no scopes is enough) to lift the limit.
+
 ## Optional: Email Delivery Setup
 
 To receive reports via email (Gmail example):
@@ -174,7 +206,8 @@ delivery:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TAVILY_API_KEY` | Yes | Tavily API key for news search |
+| `TAVILY_API_KEY` | If `search.provider` is `tavily` | Tavily API key for news search |
+| `GITHUB_TOKEN` | No | Raises the GitHub API rate limit for `github` (60 → 5000 requests/hour) |
 | `ANTHROPIC_API_KEY` | If using `claude` provider | Anthropic API key |
 | `OPENAI_API_KEY` | If using OpenAI | OpenAI API key |
 | `SMTP_HOST` | If using email | SMTP server (e.g., `smtp.gmail.com`) |

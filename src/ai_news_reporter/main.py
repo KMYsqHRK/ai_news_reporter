@@ -8,7 +8,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from .collectors import TavilyCollector, WebScraper
+from .collectors import (
+    ClaudeWebSearchCollector,
+    GitHubStarsCollector,
+    TavilyCollector,
+    WebScraper,
+)
 from .core.config import AppConfig, Settings
 from .core.exceptions import AINewsReporterError
 from .delivery import EmailDelivery, FileDelivery, SlackDelivery
@@ -26,29 +31,61 @@ console = Console()
 async def run_report_async(settings: Settings, config: AppConfig) -> None:
     """Run report generation asynchronously."""
     all_articles = []
+    repo_updates = []
 
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
-        # Collect from Tavily search
-        if config.search.enabled and settings.tavily_api_key:
-            task = progress.add_task("Searching news with Tavily...", total=None)
+        # Collect from web search
+        search = config.search
+        collector = None
+        if search.enabled and search.provider == "claude_code":
             try:
-                collector = TavilyCollector(settings.tavily_api_key)
-                for keyword in config.keywords:
+                collector = ClaudeWebSearchCollector(
+                    model=config.llm.model if config.llm.provider == "claude_code" else "sonnet",
+                    cli_path=config.llm.cli_path,
+                    language=config.report.language,
+                )
+            except AINewsReporterError as e:
+                console.print(f"[yellow]Claude web search unavailable: {e}[/yellow]")
+        elif search.enabled and settings.tavily_api_key:
+            collector = TavilyCollector(settings.tavily_api_key)
+
+        if collector:
+            task = progress.add_task(f"Searching news with {collector.name}...", total=None)
+            for keyword in config.keywords:
+                try:
                     articles = await collector.collect(
                         query=keyword,
-                        time_range=config.search.time_range,
-                        max_results=config.search.max_results_per_keyword,
-                        include_domains=config.search.include_domains or None,
-                        exclude_domains=config.search.exclude_domains or None,
+                        time_range=search.time_range,
+                        max_results=search.max_results_per_keyword,
+                        include_domains=search.include_domains or None,
+                        exclude_domains=search.exclude_domains or None,
                     )
                     all_articles.extend(articles)
+                except AINewsReporterError as e:
+                    console.print(f"[yellow]Search for {keyword!r} failed: {e}[/yellow]")
+            progress.update(task, completed=True)
+
+        # Collect updates of starred GitHub repositories
+        github = config.github
+        if github.enabled:
+            task = progress.add_task("Checking starred GitHub repositories...", total=None)
+            try:
+                gh_collector = GitHubStarsCollector(
+                    username=github.username,
+                    token=settings.github_token,
+                    include_commits=github.include_commits,
+                    exclude=github.exclude,
+                )
+                repo_updates = await gh_collector.collect(
+                    time_range=github.time_range, max_items=github.max_items
+                )
                 progress.update(task, completed=True)
             except AINewsReporterError as e:
-                console.print(f"[yellow]Tavily search failed: {e}[/yellow]")
+                console.print(f"[yellow]GitHub stars collection failed: {e}[/yellow]")
 
         # Collect from configured sites
         sites = [s for s in config.sites if s.enabled]
@@ -62,11 +99,13 @@ async def run_report_async(settings: Settings, config: AppConfig) -> None:
             except AINewsReporterError as e:
                 console.print(f"[yellow]Web scraping failed: {e}[/yellow]")
 
-    if not all_articles:
+    if not all_articles and not repo_updates:
         console.print("[red]No articles collected. Check your configuration.[/red]")
         raise typer.Exit(1)
 
     console.print(f"[green]Collected {len(all_articles)} articles[/green]")
+    if config.github.enabled:
+        console.print(f"[green]Found changes in {len(repo_updates)} starred repositories[/green]")
 
     # Deduplicate
     if config.report.deduplicate:
@@ -111,6 +150,8 @@ async def run_report_async(settings: Settings, config: AppConfig) -> None:
             recipients=config.delivery.email_recipients,
             highlight_count=config.report.highlight_count,
             focus=config.report.focus,
+            repo_updates=repo_updates,
+            language=config.report.language,
         )
         progress.update(task, completed=True)
 
@@ -286,6 +327,10 @@ def validate(
         console.print(f"  - Keywords: {len(config.keywords)}")
         console.print(f"  - Sites: {len(config.sites)}")
         console.print(f"  - LLM provider: {config.llm.provider}")
+        console.print(f"  - Search provider: {config.search.provider}")
+        if config.github.enabled:
+            who = config.github.username or "(GITHUB_TOKEN owner)"
+            console.print(f"  - GitHub stars: {who}, last {config.github.time_range}")
         if config.schedule.type == "weekly":
             console.print(
                 f"  - Schedule: {config.schedule.type} on {config.schedule.day_of_week} "

@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # Search API
     tavily_api_key: str = Field(default="", alias="TAVILY_API_KEY")
 
+    # GitHub (optional: raises the API rate limit, or lists your stars without github.username)
+    github_token: str = Field(default="", alias="GITHUB_TOKEN")
+
     # Email (SMTP)
     smtp_host: str = Field(default="smtp.gmail.com", alias="SMTP_HOST")
     smtp_port: int = Field(default=587, alias="SMTP_PORT")
@@ -55,10 +58,24 @@ class SearchConfig:
 
     def __init__(self, data: dict[str, Any]):
         self.enabled: bool = data.get("enabled", True)
+        # tavily (needs TAVILY_API_KEY) or claude_code (WebSearch via the logged-in Claude account)
+        self.provider: str = data.get("provider", "tavily")
         self.time_range: str = data.get("time_range", "week")
         self.max_results_per_keyword: int = data.get("max_results_per_keyword", 10)
         self.include_domains: list[str] = data.get("include_domains", [])
         self.exclude_domains: list[str] = data.get("exclude_domains", [])
+
+
+class GitHubConfig:
+    """Starred repository updates configuration."""
+
+    def __init__(self, data: dict[str, Any]):
+        self.enabled: bool = data.get("enabled", False)
+        self.username: str = data.get("username", "")
+        self.time_range: str = data.get("time_range", "week")
+        self.max_items: int = data.get("max_items", 30)
+        self.include_commits: bool = data.get("include_commits", True)
+        self.exclude: list[str] = data.get("exclude", [])
 
 
 class ScheduleConfig:
@@ -137,6 +154,8 @@ class ReportConfig:
         self.include_sources: bool = data.get("include_sources", True)
         self.highlight_count: int = data.get("highlight_count", 10)
         self.focus: str = data.get("focus", "")
+        # Language of all generated text (summaries, search result descriptions, repo updates)
+        self.language: str = data.get("language", "English")
 
 
 class AppConfig:
@@ -173,6 +192,11 @@ class AppConfig:
     def search(self) -> SearchConfig:
         """Get search configuration."""
         return SearchConfig(self._config.get("search", {}))
+
+    @property
+    def github(self) -> GitHubConfig:
+        """Get starred repository updates configuration."""
+        return GitHubConfig(self._config.get("github", {}))
 
     @property
     def schedule(self) -> ScheduleConfig:

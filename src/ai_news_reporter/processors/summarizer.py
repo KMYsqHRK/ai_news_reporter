@@ -2,9 +2,12 @@
 
 from datetime import date
 
+from ..core.exceptions import LLMError
 from ..llm.base import BaseLLM
 from ..models.article import Article
 from ..models.report import Report
+
+REPO_BATCH_CHARS = 60_000  # Change-log characters per summarization call
 
 
 class Summarizer:
@@ -26,6 +29,8 @@ class Summarizer:
         recipients: list[str] | None = None,
         highlight_count: int = 10,
         focus: str = "",
+        repo_updates: list[Article] | None = None,
+        language: str = "English",
     ) -> Report:
         """Generate a complete report from articles.
 
@@ -36,17 +41,32 @@ class Summarizer:
             recipients: Optional list of report recipients.
             highlight_count: Number of articles to feature in Highlight News.
             focus: Optional focus instructions for the report.
+            repo_updates: Starred GitHub repository change logs, summarized in their own section.
+            language: Language to write the report in.
 
         Returns:
             Generated Report object.
         """
-        # Generate summary using LLM
-        summary = await self._llm.summarize(articles, prompt, focus)
+        repo_updates = repo_updates or []
 
-        # Generate full markdown report
-        content_markdown = await self._llm.generate_report(
-            articles, title, prompt, highlight_count, focus
-        )
+        if articles:
+            # Generate summary using LLM
+            summary = await self._llm.summarize(articles, prompt, focus, language)
+
+            # Generate full markdown report
+            content_markdown = await self._llm.generate_report(
+                articles, title, prompt, highlight_count, focus, language
+            )
+        else:
+            summary = "No news articles this period."
+            content_markdown = f"# {title}\n\n"
+
+        if repo_updates:
+            content_markdown = (
+                content_markdown.rstrip()
+                + "\n\n"
+                + await self._repo_section(repo_updates, language)
+            )
 
         # Generate plain text version (strip markdown)
         content_text = self._markdown_to_text(content_markdown)
@@ -57,13 +77,46 @@ class Summarizer:
         return Report(
             title=title,
             date=date.today(),
-            articles=articles,
+            articles=articles + repo_updates,
             summary=summary,
             content_markdown=content_markdown,
             content_html=content_html,
             content_text=content_text,
             recipients=recipients or [],
         )
+
+    async def _repo_section(self, repos: list[Article], language: str) -> str:
+        """Summarize starred repositories' change logs as a markdown section."""
+        # Split into batches so a few very active repos do not overflow one prompt
+        batches: list[list[Article]] = [[]]
+        size = 0
+        for repo in repos:
+            if batches[-1] and size + len(repo.content) > REPO_BATCH_CHARS:
+                batches.append([])
+                size = 0
+            batches[-1].append(repo)
+            size += len(repo.content)
+
+        parts = []
+        for batch in batches:
+            try:
+                parts.append((await self._llm.summarize_repo_changes(batch, language)).strip())
+            except LLMError:
+                parts.append(self._raw_repo_list(batch))
+        return "---\n\n## GitHub Starred Updates\n\n" + "\n\n".join(parts) + "\n"
+
+    def _raw_repo_list(self, repos: list[Article]) -> str:
+        """Fallback when summarization fails: releases and the first commits of each repo."""
+        entries = []
+        for repo in repos:
+            lines = [
+                line.removeprefix("### ")
+                for line in repo.content.splitlines()
+                if line.startswith(("### ", "- "))
+            ]
+            bullets = "\n".join(f"- {line.removeprefix('- ')}" for line in lines[:10])
+            entries.append(f"**[{repo.title}]({repo.url})**\n\n{bullets}")
+        return "\n\n".join(entries)
 
     def _markdown_to_text(self, markdown: str) -> str:
         """Convert markdown to plain text.

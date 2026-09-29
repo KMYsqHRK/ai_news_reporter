@@ -124,9 +124,10 @@ sites:
       content: "p"
       date: "time, .date"
 
-# Tavily search configuration
+# Web search configuration
 search:
   enabled: true
+  provider: "tavily"        # tavily (needs TAVILY_API_KEY) or claude_code (Claude account, no API key)
   time_range: "week"        # day, week, month, year
   max_results_per_keyword: 10
   include_domains: []       # Empty = all domains
@@ -134,6 +135,15 @@ search:
     - "reddit.com"
     - "twitter.com"
     - "x.com"
+
+# All changes (releases + commits) of repositories you starred on GitHub, summarized by the LLM
+github:
+  enabled: false
+  username: "your-github-username"  # Starred list is public; GITHUB_TOKEN is optional
+  time_range: "week"        # day, week, month, year
+  max_items: 30             # Max repositories in the report
+  include_commits: true     # false = releases only
+  exclude: []               # Noisy repos to skip, e.g. "pytorch/pytorch"
 
 # LLM configuration
 llm:
@@ -182,6 +192,7 @@ report:
   deduplicate: true
   include_sources: true
   highlight_count: 10       # Number of articles to feature in Highlight News section
+  language: "English"       # Language of generated text, e.g. "Japanese"
 
   # Focus instructions for the report (optional)
   # Use this to customize what topics the report should emphasize or exclude
